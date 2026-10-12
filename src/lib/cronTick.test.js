@@ -1,5 +1,83 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+const { mockSupabase, insertedRuns, updatedAutomations, resetMockDb } = vi.hoisted(() => {
+  const runs = []
+  const updates = []
+
+  const client = {
+    from: (table) => {
+      if (table === 'automations') {
+        return {
+          select: () => ({
+            eq: () => ({
+              lte: () => ({
+                limit: async () => ({
+                  data: [
+                    {
+                      id: 'auto-123',
+                      name: 'Test Automation',
+                      agent_name: 'Test Agent',
+                      provider: 'gemini',
+                      model: 'gemini-2.5-flash',
+                      system_prompt: 'You are a test helper.',
+                      inputs: { query: 'test input' },
+                      schedule: 'daily',
+                    },
+                  ],
+                  error: null,
+                }),
+              }),
+            }),
+          }),
+          update: (updateData) => ({
+            eq: async (col, val) => {
+              updates.push({ updateData, col, val })
+              return { error: null }
+            },
+          }),
+        }
+      }
+      if (table === 'user_secrets') {
+        return {
+          select: () => ({
+            eq: () => ({
+              single: async () => ({
+                data: {
+                  encrypted_key: Buffer.from('test-gemini-secret-key').toString('base64'),
+                },
+              }),
+            }),
+          }),
+        }
+      }
+      if (table === 'automation_runs') {
+        return {
+          insert: async (record) => {
+            runs.push(record)
+            return { error: null }
+          },
+        }
+      }
+      return {}
+    },
+  }
+
+  return {
+    mockSupabase: client,
+    insertedRuns: runs,
+    updatedAutomations: updates,
+    resetMockDb: () => {
+      runs.length = 0
+      updates.length = 0
+    },
+  }
+})
+
+vi.mock('@supabase/supabase-js', () => ({
+  createClient: () => mockSupabase,
+}))
+
 import handler, {
   buildCronRequest,
   parseCronResponse,
@@ -65,13 +143,14 @@ describe('buildCronRequest', () => {
     expect(req.body.model).toBe('claude-3-5-haiku-20241022')
   })
 
-  it('builds gemini request with key in query string and content parts', () => {
+  it('builds gemini request with key in header and content parts', () => {
     const req = buildCronRequest('gemini', apiKey, undefined, systemPrompt, userMessage)
     expect(req.url).toBe(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
     )
     expect(req.headers).toEqual({
       'Content-Type': 'application/json',
+      'x-goog-api-key': apiKey,
     })
     expect(req.body).toEqual({
       contents: [
@@ -82,11 +161,12 @@ describe('buildCronRequest', () => {
     })
   })
 
-  it('builds gemini request with custom model', () => {
-    const req = buildCronRequest('gemini', apiKey, 'gemini-1.5-pro', systemPrompt, userMessage)
+  it('builds gemini request with custom model and encoded path segment', () => {
+    const req = buildCronRequest('gemini', apiKey, 'models/gemini-1.5-pro', systemPrompt, userMessage)
     expect(req.url).toBe(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${apiKey}`
+      'https://generativelanguage.googleapis.com/v1beta/models/models%2Fgemini-1.5-pro:generateContent'
     )
+    expect(req.headers['x-goog-api-key']).toBe(apiKey)
   })
 
   it('builds openrouter request with referer headers and openrouter default model', () => {
@@ -247,3 +327,120 @@ describe('handler authorization and serverless simulation', () => {
     expect(responseBody.processedCount).toBe(0)
   })
 })
+
+describe('handler execution with configured Supabase', () => {
+  const originalEnv = { ...process.env }
+  const originalFetch = global.fetch
+
+  beforeEach(() => {
+    process.env = { ...originalEnv }
+    process.env.VITE_SUPABASE_URL = 'https://example.supabase.co'
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'mock-service-role-key'
+    delete process.env.CRON_SECRET
+    delete process.env.RESEND_API_KEY
+
+    resetMockDb()
+  })
+
+  afterEach(() => {
+    process.env = { ...originalEnv }
+    global.fetch = originalFetch
+    resetMockDb()
+  })
+
+  it('executes due gemini automation and inserts successful run with parsed output', async () => {
+    let capturedUrl = null
+    let capturedOptions = null
+
+    global.fetch = vi.fn().mockImplementation(async (url, options) => {
+      capturedUrl = url
+      capturedOptions = options
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [
+            {
+              content: {
+                parts: [{ text: 'Live generated output from Gemini' }],
+              },
+            },
+          ],
+        }),
+      }
+    })
+
+    const req = { headers: {} }
+    let resData = null
+    const res = {
+      status: vi.fn().mockReturnValue({
+        json: vi.fn((d) => {
+          resData = d
+        }),
+      }),
+    }
+
+    await handler(req, res)
+
+    expect(capturedUrl).toBe(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent'
+    )
+    expect(capturedOptions.headers['x-goog-api-key']).toBe('test-gemini-secret-key')
+    expect(insertedRuns).toHaveLength(1)
+    expect(insertedRuns[0].status).toBe('success')
+    expect(insertedRuns[0].output).toBe('Live generated output from Gemini')
+    expect(insertedRuns[0].error).toBeNull()
+    expect(resData.processedCount).toBe(1)
+  })
+
+  it('marks run as failed when provider returns non-2xx status code', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => JSON.stringify({ error: { message: 'API key expired or invalid' } }),
+    })
+
+    const req = { headers: {} }
+    let resData = null
+    const res = {
+      status: vi.fn().mockReturnValue({
+        json: vi.fn((d) => {
+          resData = d
+        }),
+      }),
+    }
+
+    await handler(req, res)
+
+    expect(insertedRuns).toHaveLength(1)
+    expect(insertedRuns[0].status).toBe('failed')
+    expect(insertedRuns[0].error).toContain('gemini API error 401: API key expired or invalid')
+    expect(resData.results[0].status).toBe('failed')
+  })
+
+  it('handles non-JSON error response from provider gracefully', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => 'Internal Server Error',
+    })
+
+    const req = { headers: {} }
+    let resData = null
+    const res = {
+      status: vi.fn().mockReturnValue({
+        json: vi.fn((d) => {
+          resData = d
+        }),
+      }),
+    }
+
+    await handler(req, res)
+
+    expect(insertedRuns).toHaveLength(1)
+    expect(insertedRuns[0].status).toBe('failed')
+    expect(insertedRuns[0].error).toContain('gemini API error 500: Internal Server Error')
+    expect(resData.results[0].status).toBe('failed')
+  })
+})
+

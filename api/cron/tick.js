@@ -46,9 +46,10 @@ export function buildCronRequest(provider, apiKey, model, systemPrompt, userMess
   if (prov === 'gemini') {
     const targetModel = model || 'gemini-2.5-flash'
     return {
-      url: `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${apiKey}`,
+      url: `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(targetModel)}:generateContent`,
       headers: {
         'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
       },
       body: {
         contents: [
@@ -232,6 +233,14 @@ export default async function handler(req, res) {
             headers: cronReq.headers,
             body: JSON.stringify(cronReq.body),
           })
+          if (!resp.ok) {
+            const text = await resp.text().catch(() => '')
+            let detail = text
+            try {
+              detail = JSON.parse(text)?.error?.message || text
+            } catch {}
+            throw new Error(`${normalizedProvider} API error ${resp.status}: ${String(detail).slice(0, 500)}`)
+          }
           const json = await resp.json()
           output = parseCronResponse(normalizedProvider, json)
         } else {
