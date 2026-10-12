@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, it, expect } from 'vitest'
 import agent from './definitions/dependency-impact-analyzer'
 import { CATEGORIES } from './categories'
@@ -50,6 +51,7 @@ describe('Dependency Impact Analyzer Agent Definition', () => {
     expect(agent.systemPrompt).toContain('Affected Modules')
     expect(agent.systemPrompt).toContain('Transitive Dependency')
     expect(agent.systemPrompt).toContain('Upgrade Checklist')
+    expect(agent.systemPrompt).toContain('Use release notes only when provided in user input')
   })
 
   it('includes valid example inputs corresponding to declared input IDs', () => {

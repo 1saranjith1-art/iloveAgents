@@ -69,6 +69,7 @@ Project Context & Manifest:
 
 Release Notes / Changelog Context:
 {{release_notes}}
+Use release notes only when provided in user input. If none are provided, state that clearly and do not present assumptions as confirmed changelog facts.
 
 Structure your analysis using clean Markdown with the following required sections:
 
