@@ -1,9 +1,23 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
-const { mockSupabase, insertedRuns, updatedAutomations, resetMockDb } = vi.hoisted(() => {
+const { mockSupabase, insertedRuns, updatedAutomations, resetMockDb, setMockAutomations } = vi.hoisted(() => {
   const runs = []
   const updates = []
+  let customAutomations = null
+
+  const defaultAutomations = [
+    {
+      id: 'auto-123',
+      name: 'Test Automation',
+      agent_name: 'Test Agent',
+      provider: 'gemini',
+      model: 'gemini-2.5-flash',
+      system_prompt: 'You are a test helper.',
+      inputs: { query: 'test input' },
+      schedule: 'daily',
+    },
+  ]
 
   const client = {
     from: (table) => {
@@ -13,18 +27,7 @@ const { mockSupabase, insertedRuns, updatedAutomations, resetMockDb } = vi.hoist
             eq: () => ({
               lte: () => ({
                 limit: async () => ({
-                  data: [
-                    {
-                      id: 'auto-123',
-                      name: 'Test Automation',
-                      agent_name: 'Test Agent',
-                      provider: 'gemini',
-                      model: 'gemini-2.5-flash',
-                      system_prompt: 'You are a test helper.',
-                      inputs: { query: 'test input' },
-                      schedule: 'daily',
-                    },
-                  ],
+                  data: customAutomations || defaultAutomations,
                   error: null,
                 }),
               }),
@@ -67,9 +70,13 @@ const { mockSupabase, insertedRuns, updatedAutomations, resetMockDb } = vi.hoist
     mockSupabase: client,
     insertedRuns: runs,
     updatedAutomations: updates,
+    setMockAutomations: (data) => {
+      customAutomations = data
+    },
     resetMockDb: () => {
       runs.length = 0
       updates.length = 0
+      customAutomations = null
     },
   }
 })
@@ -81,6 +88,7 @@ vi.mock('@supabase/supabase-js', () => ({
 import handler, {
   buildCronRequest,
   parseCronResponse,
+  sendCronEmailNotification,
   SUPPORTED_CRON_PROVIDERS,
 } from '../../api/cron/tick.js'
 
@@ -263,6 +271,107 @@ describe('parseCronResponse', () => {
   })
 })
 
+describe('sendCronEmailNotification', () => {
+  const originalFetch = global.fetch
+
+  afterEach(() => {
+    global.fetch = originalFetch
+  })
+
+  it('sends email notification via Resend with expected endpoint, headers, and body', async () => {
+    let capturedUrl = null
+    let capturedOptions = null
+
+    global.fetch = vi.fn().mockImplementation(async (url, options) => {
+      capturedUrl = url
+      capturedOptions = options
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ id: 'email-123' }),
+      }
+    })
+
+    const result = await sendCronEmailNotification('resend-api-key', {
+      to: 'recipient@example.com',
+      name: 'Morning Digest',
+      output: 'Here is your daily summary.',
+    })
+
+    expect(capturedUrl).toBe('https://api.resend.com/emails')
+    expect(capturedOptions.method).toBe('POST')
+    expect(capturedOptions.headers).toEqual({
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer resend-api-key',
+    })
+    const payload = JSON.parse(capturedOptions.body)
+    expect(payload.to).toEqual(['recipient@example.com'])
+    expect(payload.subject).toContain('Morning Digest')
+    expect(payload.html).toContain('Here is your daily summary.')
+    expect(result).toEqual({ id: 'email-123' })
+  })
+
+  it('throws descriptive error when Resend returns HTTP 401', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => JSON.stringify({ message: 'Invalid API key', statusCode: 401 }),
+    })
+
+    await expect(
+      sendCronEmailNotification('bad-key', {
+        to: 'user@example.com',
+        name: 'Test Auto',
+        output: 'test output',
+      })
+    ).rejects.toThrow('Resend notification error 401: Invalid API key')
+  })
+
+  it('throws descriptive error when Resend returns HTTP 429', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      text: async () => JSON.stringify({ message: 'Rate limit exceeded', statusCode: 429 }),
+    })
+
+    await expect(
+      sendCronEmailNotification('key', {
+        to: 'user@example.com',
+        name: 'Test Auto',
+        output: 'test output',
+      })
+    ).rejects.toThrow('Resend notification error 429: Rate limit exceeded')
+  })
+
+  it('handles non-JSON error response from Resend gracefully', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 502,
+      text: async () => 'Bad Gateway from edge',
+    })
+
+    await expect(
+      sendCronEmailNotification('key', {
+        to: 'user@example.com',
+        name: 'Test Auto',
+        output: 'test output',
+      })
+    ).rejects.toThrow('Resend notification error 502: Bad Gateway from edge')
+  })
+
+  it('throws descriptive error when network fetch fails', async () => {
+    global.fetch = vi.fn().mockRejectedValue(new Error('Connection timed out'))
+
+    await expect(
+      sendCronEmailNotification('key', {
+        to: 'user@example.com',
+        name: 'Test Auto',
+        output: 'test output',
+      })
+    ).rejects.toThrow('Resend notification network error: Connection timed out')
+  })
+})
+
 describe('handler authorization and serverless simulation', () => {
   const originalEnv = { ...process.env }
 
@@ -441,6 +550,249 @@ describe('handler execution with configured Supabase', () => {
     expect(insertedRuns[0].status).toBe('failed')
     expect(insertedRuns[0].error).toContain('gemini API error 500: Internal Server Error')
     expect(resData.results[0].status).toBe('failed')
+  })
+
+  it('executes due automation with email notification enabled and records successful run', async () => {
+    setMockAutomations([
+      {
+        id: 'auto-resend-1',
+        name: 'Email Automation',
+        agent_name: 'Reporter',
+        provider: 'gemini',
+        model: 'gemini-2.5-flash',
+        email_notification: true,
+        notification_email: 'notify@example.com',
+        schedule: 'daily',
+      },
+    ])
+    process.env.RESEND_API_KEY = 'resend-valid-key'
+
+    const calls = []
+    global.fetch = vi.fn().mockImplementation(async (url, options) => {
+      calls.push({ url, options })
+      if (url.includes('api.resend.com')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ id: 're-123' }),
+        }
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{ content: { parts: [{ text: 'Generated insight' }] } }],
+        }),
+      }
+    })
+
+    const req = { headers: {} }
+    let resData = null
+    const res = {
+      status: vi.fn().mockReturnValue({
+        json: vi.fn((d) => {
+          resData = d
+        }),
+      }),
+    }
+
+    await handler(req, res)
+
+    expect(calls).toHaveLength(2)
+    expect(calls[1].url).toBe('https://api.resend.com/emails')
+    expect(insertedRuns).toHaveLength(1)
+    expect(insertedRuns[0].status).toBe('success')
+    expect(insertedRuns[0].output).toBe('Generated insight')
+    expect(insertedRuns[0].error).toBeNull()
+    expect(resData.results[0].status).toBe('success')
+  })
+
+  it('records run as failed when Resend returns HTTP 401, preserving output and distinguishing error', async () => {
+    setMockAutomations([
+      {
+        id: 'auto-resend-2',
+        name: 'Email Automation 401',
+        agent_name: 'Reporter',
+        provider: 'gemini',
+        model: 'gemini-2.5-flash',
+        email_notification: true,
+        notification_email: 'notify@example.com',
+        schedule: 'daily',
+      },
+    ])
+    process.env.RESEND_API_KEY = 'bad-resend-key'
+
+    global.fetch = vi.fn().mockImplementation(async (url) => {
+      if (url.includes('api.resend.com')) {
+        return {
+          ok: false,
+          status: 401,
+          text: async () => JSON.stringify({ message: 'API key is invalid' }),
+        }
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{ content: { parts: [{ text: 'Generated insight before email failed' }] } }],
+        }),
+      }
+    })
+
+    const req = { headers: {} }
+    let resData = null
+    const res = {
+      status: vi.fn().mockReturnValue({
+        json: vi.fn((d) => {
+          resData = d
+        }),
+      }),
+    }
+
+    await handler(req, res)
+
+    expect(insertedRuns).toHaveLength(1)
+    expect(insertedRuns[0].status).toBe('failed')
+    expect(insertedRuns[0].output).toBe('Generated insight before email failed')
+    expect(insertedRuns[0].error).toContain('Resend notification error 401: API key is invalid')
+    expect(resData.results[0].status).toBe('failed')
+  })
+
+  it('records run as failed when Resend returns HTTP 429', async () => {
+    setMockAutomations([
+      {
+        id: 'auto-resend-3',
+        name: 'Email Automation 429',
+        agent_name: 'Reporter',
+        provider: 'gemini',
+        model: 'gemini-2.5-flash',
+        email_notification: true,
+        notification_email: 'notify@example.com',
+        schedule: 'daily',
+      },
+    ])
+    process.env.RESEND_API_KEY = 'resend-rate-limited-key'
+
+    global.fetch = vi.fn().mockImplementation(async (url) => {
+      if (url.includes('api.resend.com')) {
+        return {
+          ok: false,
+          status: 429,
+          text: async () => JSON.stringify({ message: 'Too many requests' }),
+        }
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{ content: { parts: [{ text: 'Generated content' }] } }],
+        }),
+      }
+    })
+
+    const req = { headers: {} }
+    let resData = null
+    const res = {
+      status: vi.fn().mockReturnValue({
+        json: vi.fn((d) => {
+          resData = d
+        }),
+      }),
+    }
+
+    await handler(req, res)
+
+    expect(insertedRuns).toHaveLength(1)
+    expect(insertedRuns[0].status).toBe('failed')
+    expect(insertedRuns[0].error).toContain('Resend notification error 429: Too many requests')
+    expect(resData.results[0].status).toBe('failed')
+  })
+
+  it('records run as failed when Resend dispatch encounters network failure', async () => {
+    setMockAutomations([
+      {
+        id: 'auto-resend-4',
+        name: 'Email Automation Network Error',
+        agent_name: 'Reporter',
+        provider: 'gemini',
+        model: 'gemini-2.5-flash',
+        email_notification: true,
+        notification_email: 'notify@example.com',
+        schedule: 'daily',
+      },
+    ])
+    process.env.RESEND_API_KEY = 'resend-key'
+
+    global.fetch = vi.fn().mockImplementation(async (url) => {
+      if (url.includes('api.resend.com')) {
+        throw new Error('connect ECONNREFUSED')
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{ content: { parts: [{ text: 'Generated content' }] } }],
+        }),
+      }
+    })
+
+    const req = { headers: {} }
+    let resData = null
+    const res = {
+      status: vi.fn().mockReturnValue({
+        json: vi.fn((d) => {
+          resData = d
+        }),
+      }),
+    }
+
+    await handler(req, res)
+
+    expect(insertedRuns).toHaveLength(1)
+    expect(insertedRuns[0].status).toBe('failed')
+    expect(insertedRuns[0].error).toContain('Resend notification network error: connect ECONNREFUSED')
+    expect(resData.results[0].status).toBe('failed')
+  })
+
+  it('does not call Resend when email_notification is false', async () => {
+    setMockAutomations([
+      {
+        id: 'auto-no-email',
+        name: 'No Email Auto',
+        agent_name: 'Reporter',
+        provider: 'gemini',
+        model: 'gemini-2.5-flash',
+        email_notification: false,
+        notification_email: 'notify@example.com',
+        schedule: 'daily',
+      },
+    ])
+    process.env.RESEND_API_KEY = 'resend-key'
+
+    const urls = []
+    global.fetch = vi.fn().mockImplementation(async (url) => {
+      urls.push(url)
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          candidates: [{ content: { parts: [{ text: 'Generated without email' }] } }],
+        }),
+      }
+    })
+
+    const req = { headers: {} }
+    const res = {
+      status: vi.fn().mockReturnValue({
+        json: vi.fn(),
+      }),
+    }
+
+    await handler(req, res)
+
+    expect(urls).toHaveLength(1)
+    expect(urls[0]).not.toContain('resend.com')
+    expect(insertedRuns[0].status).toBe('success')
   })
 })
 

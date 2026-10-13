@@ -124,6 +124,49 @@ export function parseCronResponse(provider, json) {
 }
 
 /**
+ * Sends an email notification for a completed automation run via Resend.
+ *
+ * @param {string} apiKey - Resend API key.
+ * @param {object} params - Notification parameters.
+ * @param {string} params.to - Recipient email address.
+ * @param {string} params.name - Automation name.
+ * @param {string} params.output - Generated output to include in email.
+ * @returns {Promise<object>} Parsed JSON response from Resend.
+ */
+export async function sendCronEmailNotification(apiKey, { to, name, output }) {
+  let resp
+  try {
+    resp = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        from: 'Open Agents Hub <automations@openagentshub.dev>',
+        to: [to],
+        subject: `[Open Agents Hub] ✅ Completed: ${name}`,
+        html: `<h2>${name} Run Output</h2><pre>${output}</pre>`,
+      }),
+    })
+  } catch (netErr) {
+    throw new Error(`Resend notification network error: ${netErr.message || 'Failed to send email'}`)
+  }
+
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '')
+    let detail = text
+    try {
+      const errJson = JSON.parse(text)
+      detail = errJson?.message || errJson?.error?.message || (typeof errJson?.error === 'string' ? errJson.error : null) || text
+    } catch {}
+    throw new Error(`Resend notification error ${resp.status}: ${String(detail).slice(0, 500)}`)
+  }
+
+  return await resp.json().catch(() => ({ success: true }))
+}
+
+/**
  * Vercel Cron Handler: /api/cron/tick
  *
  * Runs automatically on schedule configured in vercel.json cron.
@@ -249,18 +292,10 @@ export default async function handler(req, res) {
 
         // Email Notification via Resend
         if (auto.email_notification && auto.notification_email && process.env.RESEND_API_KEY) {
-          await fetch('https://api.resend.com/emails', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-            },
-            body: JSON.stringify({
-              from: 'Open Agents Hub <automations@openagentshub.dev>',
-              to: [auto.notification_email],
-              subject: `[Open Agents Hub] ✅ Completed: ${auto.name}`,
-              html: `<h2>${auto.name} Run Output</h2><pre>${output}</pre>`,
-            }),
+          await sendCronEmailNotification(process.env.RESEND_API_KEY, {
+            to: auto.notification_email,
+            name: auto.name,
+            output,
           })
         }
       } catch (err) {
