@@ -51,13 +51,17 @@ describe('GitHub Actions Workflow Optimizer Agent Definition', () => {
     expect(yamlInput.required).toBe(true)
   })
 
-  it('contains comprehensive systemPrompt covering key CI/CD optimization pillars', () => {
+  it('contains comprehensive systemPrompt covering key CI/CD optimization pillars and safety guardrails', () => {
     expect(typeof agent.systemPrompt).toBe('string')
     expect(agent.systemPrompt).toContain('Speed & Caching')
     expect(agent.systemPrompt).toContain('Security & Permissions')
     expect(agent.systemPrompt).toContain('Concurrency & Waste Prevention')
     expect(agent.systemPrompt).toContain('Optimized Workflow YAML')
     expect(agent.systemPrompt).toContain('Executive Optimization Scorecard')
+    expect(agent.systemPrompt).toContain('cancel-in-progress: true')
+    expect(agent.systemPrompt).toContain('deployment, release, or required audit pipelines that must run to completion')
+    expect(agent.systemPrompt).toContain('preserve existing trigger coverage unless skipping is verified safe')
+    expect(agent.systemPrompt).toContain('paths-ignore')
   })
 
   it('includes valid example inputs corresponding to declared input IDs', () => {

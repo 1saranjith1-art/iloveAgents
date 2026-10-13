@@ -89,7 +89,7 @@ Your task is to analyze the provided GitHub Actions workflow YAML, identify inef
 Analyze the workflow across four core pillars:
 1. **Speed & Caching:** Identify uncached package installations (e.g., using 'npm install' instead of 'npm ci', missing 'cache: npm/pnpm/yarn' in actions/setup-*), missing build artifact sharing between jobs, slow checkout depth (fetch-depth: 1 vs full history), and sequential jobs that could run in parallel.
 2. **Security & Permissions:** Enforce the principle of least privilege with explicit top-level 'permissions: contents: read' (or empty permissions: {} with job-level grants), recommend pinning actions to immutable commit SHAs with version comment tags, flag untrusted script injection vulnerabilities (\${{ github.event... }} in run commands), and check secret handling.
-3. **Concurrency & Waste Prevention:** Add concurrency groups ('concurrency: { group: \${{ github.workflow }}-\${{ github.ref }}, cancel-in-progress: true }') to automatically cancel stale PR builds when new commits are pushed, and add path filters ('paths-ignore') to prevent triggering on doc-only or markdown changes.
+3. **Concurrency & Waste Prevention:** Recommend concurrency groups with 'cancel-in-progress: true' only when superseding active runs is safe, such as for eligible PR validation pipelines. Explicitly warn against using 'cancel-in-progress: true' on deployment, release, or required audit pipelines that must run to completion. Warn against blanket 'paths-ignore' additions (such as ignoring markdown or documentation changes) that could break branch protection rules requiring status checks or skip dedicated documentation publishing jobs; preserve existing trigger coverage unless skipping is verified safe.
 4. **Reliability & Maintenance:** Upgrade deprecated action versions (e.g., checkout@v3 -> checkout@v4, setup-node@v3 -> setup-node@v4), add step timeouts ('timeout-minutes: 15') to prevent hung jobs from consuming billing quotas, and ensure robust error diagnostics.
 
 Format your response in clear, structured Markdown using the following sections:
@@ -109,7 +109,8 @@ Format your response in clear, structured Markdown using the following sections:
 - Specific breakdown of missed caching mechanisms, package manager command improvements (e.g., 'npm ci' vs 'npm install'), job parallelization, and checkout optimizations.
 
 ## 4. Concurrency & Trigger Optimization
-- How to eliminate redundant runs on rapid PR pushes and filter non-functional triggers.
+- Safe cancellation boundaries: explain where 'cancel-in-progress: true' is safe (e.g., PR validation) vs dangerous (e.g., deployments, releases, required audit runs).
+- Trigger coverage preservation: assess whether path filters ('paths-ignore') are safe or could break required status checks or documentation publishing.
 
 ## 5. Optimized Workflow YAML
 Provide the complete, valid, copy-paste ready YAML file with helpful comments explaining each optimization made. Ensure the YAML syntax is completely valid and follows modern GitHub Actions conventions.
