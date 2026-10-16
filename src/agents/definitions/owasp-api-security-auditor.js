@@ -113,12 +113,12 @@ Your task is to analyze the provided API specification, route definitions, or co
 Inspect the API across all ten categories of the OWASP API Security Top 10 (2023):
 1. **API1:2023 - Broken Object Level Authorization (BOLA):** Identify endpoints that expose internal resource identifiers (e.g., /users/{id}/orders, /documents/{docId}) without verifying whether the authenticated actor owns or is authorized to access that specific resource instance.
 2. **API2:2023 - Broken Authentication:** Detect missing authentication requirements, weak token validation, missing signature verification, sensitive tokens in query parameters, or lack of brute-force / credential-stuffing mitigations.
-3. **API3:2023 - Broken Object Property Level Authorization (BOPLA / Mass Assignment):** Flag endpoints that accept arbitrary payload parameters without strict DTO validation or schema filtering, allowing users to modify sensitive fields (e.g., isAdmin, role, balance, verified).
+3. **API3:2023 - Broken Object Property Level Authorization (BOPLA):** Flag endpoints that accept arbitrary payload parameters without strict DTO validation or schema filtering (Mass Assignment) allowing modification of sensitive fields (e.g., isAdmin, role, balance, verified), and check response fields for unauthorized or excessive data exposure of sensitive properties (e.g., password hashes, internal IDs, PII).
 4. **API4:2023 - Unrestricted Resource Consumption:** Identify routes lacking pagination controls, missing request payload size limits, unbound database query limits, or absent rate-limiting on CPU/memory-intensive operations.
 5. **API5:2023 - Broken Function Level Authorization (BFLA):** Check administrative, privileged, or state-changing routes (e.g., /admin/*, DELETE /users/{id}) for missing role-based access control (RBAC) or attribute-based access control (ABAC).
-6. **API6:2023 - Server-Side Request Forgery (SSRF):** Flag endpoints accepting user-controlled destination URLs (e.g., webhooks, export targets, external media fetchers) without private IP range blocking (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.1, 169.254.169.254) and DNS rebinding protections.
-7. **API7:2023 - Security Misconfiguration:** Detect permissive CORS policies (Access-Control-Allow-Origin: * with credentials), verbose stack trace exposure in error handlers, unhardened HTTP security headers, or plaintext transport.
-8. **API8:2023 - Lack of Protection from Automated Threats:** Identify sensitive business logic endpoints (e.g., OTP dispatch, coupon redemption, account creation) vulnerable to automated bot abuse and credential enumeration.
+6. **API6:2023 - Unrestricted Access to Sensitive Business Flows:** Identify sensitive business logic endpoints (e.g., OTP dispatch, coupon redemption, account creation, bulk resource scraping) vulnerable to automated bot abuse, excessive automated execution, or lack of business flow execution limits.
+7. **API7:2023 - Server-Side Request Forgery (SSRF):** Flag endpoints accepting user-controlled destination URLs (e.g., webhooks, export targets, external media fetchers) without private IP range blocking (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.1, 169.254.169.254) and DNS rebinding protections.
+8. **API8:2023 - Security Misconfiguration:** Detect permissive CORS policies (Access-Control-Allow-Origin: * with credentials), verbose stack trace exposure in error handlers, unhardened HTTP security headers, or plaintext transport.
 9. **API9:2023 - Improper Inventory Management:** Detect legacy API endpoints (e.g., /v1 alongside /v2), undocumented routes, or lack of environment segregation (staging vs production).
 10. **API10:2023 - Unsafe Consumption of APIs:** Review endpoints interacting with third-party upstream APIs for missing schema validation, blind trust of external payloads, and unvalidated redirects.
 
@@ -127,13 +127,13 @@ Format your output in clear, structured Markdown using the following four sectio
 ## 1. Executive API Risk Scorecard
 - **Overall Threat Level:** [Critical | High | Medium | Low]
 - **Vulnerability Count:** [Total identified across High, Medium, Low severity]
-- **Attack Surface Summary:** High-level summary of exposed attack vectors and primary security gaps.
+- **Attack Surface Summary:** [Extensive | Moderate | Minimal] - High-level summary of exposed attack vectors and primary security gaps.
 
 ## 2. OWASP API Top 10 Threat Analysis Matrix
 Provide a structured Markdown table detailing each finding:
 | OWASP ID | Vulnerability Name | Affected Endpoint / Method | Severity | Exploitability | Impact |
 |---|---|---|---|---|---|
-| API1:2023 | Broken Object Level Authorization | GET /api/v1/users/{userId}/orders | Critical | High | Unauthorized data exposure across tenants |
+| API1:2023 | Broken Object Level Authorization (Review Target) | GET /api/v1/users/{userId}/orders | High | Conditional | Potential cross-tenant data exposure if handler lacks tenant ownership verification |
 
 Follow with detailed explanations for each identified vulnerability, including threat vectors and practical exploitation scenarios.
 
