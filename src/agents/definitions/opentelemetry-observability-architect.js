@@ -19,7 +19,7 @@ export default {
     observability_backend:
       "Open-Source Stack (Grafana Tempo + Prometheus + Loki)",
     sampling_and_cardinality:
-      "High volume: ~25M spans/day. Need 100% trace capture on HTTP 5xx errors and slow endpoints (>800ms), but 5% head sampling on routine health checks to avoid ingestion cost spikes.",
+      "High volume: ~25M spans/day. Preserve 100% trace capture on HTTP 5xx errors and slow endpoints (>800ms); apply 5% head sampling only to routine health checks that meet neither retention condition, to avoid ingestion cost spikes.",
   },
   inputs: [
     {
@@ -93,11 +93,11 @@ Adhere to the following architectural standards:
 Structure your response with the following comprehensive sections:
 
 ### 1. Observability Topology & Context Propagation Architecture
-- Detail the end-to-end telemetry data flow: Application SDKs -> Local/Sidecar Collector -> Gateway Collector -> Storage/Backends.
+- Detail the end-to-end telemetry data flow stages required by the selected collector_topology: for Direct-to-Backend (Serverless / Lightweight Lambda & Cloud Run) omit sidecar and gateway collector stages and show Application SDKs -> Backend directly; for other topologies show Application SDKs -> Local/Sidecar Collector -> Gateway Collector -> Storage/Backends. Follow telemetry_signals as well: exclude metrics and logs pipeline stages when only Distributed Tracing & Context Propagation is selected.
 - Provide an ASCII or Mermaid architecture diagram showing ingress, synchronous gRPC/HTTP propagation, and asynchronous event queue propagation (e.g. Kafka/RabbitMQ header injection).
 - Specify exact W3C Trace Context propagation rules:
-  - Format of 'traceparent': version (00) - 32-hex trace_id - 16-hex parent_span_id - 8-hex trace_flags (01 = sampled).
-  - Cross-cutting baggage propagation for non-security business context (e.g., 'tenant.id', 'user.tier').
+  - Format of 'traceparent': version (00) - 32-hex trace_id - 16-hex parent_span_id - 2-hex trace_flags (01 = sampled).
+  - Cross-cutting baggage propagation for non-sensitive business context only (e.g., 'user.tier', 'feature.flag'): prohibit confidential identifiers such as tenant IDs in baggage, require an outbound allowlist for approved internal baggage keys, and remove that baggage before calls cross external trust boundaries.
 
 ### 2. Application-Level OTel SDK Implementation
 - Provide idiomatic, production-ready initialization code for the primary languages identified (e.g. TypeScript/Node.js, Go, or Python):
