@@ -554,4 +554,8 @@ Built with ❤️ by [@AditthyaSS](https://github.com/AditthyaSS) and the open s
 
 </div>
 
-<!-- Fixed agent capability validation rules in registry -->
+fix/cost-estimator-display
+<!-- Resolved misleading token and cost calculation displays in CostEstimator -->
+
+<!-- Fixed agentcapability validation rules in registry -->
+
